@@ -1,0 +1,46 @@
+# 사진 내려받기 — 클라우드 세션은 이미지 사이트(Unsplash 등)에 직접 못 닿는다.
+# photos/fetch.json : [{name, url, license, page}] → photos/<name>.jpg 로 내려받아 커밋 (무료 라이선스 사진만)
+# 이미 있는 파일은 건너뛴다. 결과는 photos/fetch_log.json
+name: photo-fetch
+on:
+  push:
+    paths:
+      - 'photos/fetch.json'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: photo-fetch
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 사진 내려받기
+        run: |
+          python3 - <<'PY'
+          import json, subprocess, pathlib
+          out = pathlib.Path('photos'); out.mkdir(parents=True, exist_ok=True)
+          logp = out / 'fetch_log.json'
+          log = json.load(open(logp)) if logp.exists() else []
+          done = {x['name'] for x in log if x.get('ok')}
+          for it in json.load(open(out / 'fetch.json')):
+              dest = out / f"{it['name']}.jpg"
+              if dest.exists() or it['name'] in done:
+                  continue
+              r = subprocess.run(['curl', '-fsSL', '-m', '60', '-A', 'lesshome-photo-fetch/1.0', '-o', str(dest), it['url']])
+              ok = r.returncode == 0 and dest.exists() and dest.stat().st_size > 10000
+              if not ok and dest.exists():
+                  dest.unlink()
+              log.append(dict(name=it['name'], ok=ok, url=it['url'], license=it.get('license'), page=it.get('page')))
+          json.dump(log, open(logp, 'w'), ensure_ascii=False, indent=1)
+          print(sum(1 for x in log if x['ok']), 'ok /', len(log))
+          PY
+      - name: 커밋
+        run: |
+          git config user.name "photo-fetch bot"; git config user.email "actions@users.noreply.github.com"
+          git add photos
+          git diff --cached --quiet && exit 0
+          git commit -m "[photo-fetch] $(date -u +%FT%TZ)"
+          for i in 1 2 3; do git pull --rebase -q && git push -q && exit 0; sleep 3; done; exit 1
